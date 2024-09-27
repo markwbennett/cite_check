@@ -13,7 +13,7 @@ https://scholar.google.com/scholar?q=537+U.S.+186&hl=en&as_sdt=2&btnI=1#p198
 
 as_sdt=2 refers to cases rather than journal articles.
 
-Works also for unpublished cases (as long as the opinion is the first result—I=1 refers to the first result):  
+Works also for unpublished cases (as long as the opinion is the first result—btnI=1 refers to the first result):  
 https://scholar.google.com/scholar?q=+04-22-00513&hl=en&as_sdt=2&btnI=1
 
 # COA Page on a Particular Case:  
