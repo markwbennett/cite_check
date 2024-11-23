@@ -1,87 +1,102 @@
 import re
-from collections import defaultdict
-import os
 
-def parse_citation_line(line):
-    # Regular expression to extract citation details
-    full_case_pattern = re.compile(
-        r"FullCaseCitation\('(?P<volume>\d+) (?P<reporter>\S+) (?P<page>\d+)', groups=\{.*?\}, metadata=FullCaseCitation\.Metadata\(parenthetical=(?P<parenthetical>None|'.*?'), pin_cite=(?P<pin_cite>None|\d+), year=(?P<year>None|\d+), court=(?P<court>None|'.*?'), plaintiff=(?P<plaintiff>None|'.*?'), defendant=(?P<defendant>None|'.*?'), extra=None\)\)\)"
-    )
-    short_case_pattern = re.compile(
-        r"ShortCaseCitation\('(?P<volume>\d+) (?P<reporter>\S+) at (?P<pin_cite>\d+)', groups=\{.*?\}, metadata=ShortCaseCitation\.Metadata\(.*?\)\)"
-    )
-
-    full_case_match = full_case_pattern.match(line)
-    short_case_match = short_case_pattern.match(line)
-
-    if full_case_match:
-        return {
-            'type': 'FullCaseCitation',
-            'volume': full_case_match.group('volume'),
-            'reporter': full_case_match.group('reporter'),
-            'page': full_case_match.group('page'),
-            'pin_cite': full_case_match.group('pin_cite') if full_case_match.group('pin_cite') != 'None' else '',
-            'year': full_case_match.group('year') if full_case_match.group('year') != 'None' else '',
-            'court': full_case_match.group('court').strip("'") if full_case_match.group('court') != 'None' else '',
-            'plaintiff': full_case_match.group('plaintiff'),
-            'defendant': full_case_match.group('defendant')
-        }
-    elif short_case_match:
-        return {
-            'type': 'ShortCaseCitation',
-            'volume': short_case_match.group('volume'),
-            'reporter': short_case_match.group('reporter'),
-            'pin_cite': short_case_match.group('pin_cite')
-        }
-    return None
-
-def generate_html_from_file(file_path):
+def parse_citations(file_path):
     citations = []
+    last_citation = None
+    citation_map = {}
 
     with open(file_path, 'r') as file:
-        for line_number, line in enumerate(file, start=1):
-            citation = parse_citation_line(line)
-            if citation:
-                # Extract citation details
-                plaintiff = citation.get('plaintiff', '')
-                defendant = citation.get('defendant', '')
-                volume = citation.get('volume', 'Unknown')
-                reporter = citation.get('reporter', 'Unknown')
-                page = citation.get('page', '')
-                pin_cite = citation.get('pin_cite', '')
+        for line in file:
+            # Extract the first quoted portion
+            match = re.search(r"'([^']*)'", line)
+            if not match:
+                continue
 
-                # Truncate defendant at the first occurrence of ' , '
-                if ' ,' in defendant:
-                    defendant = defendant.split(' , ')[0]
+            citation_text = match.group(1)
+            
+            # Extract pin_cite from "at {number}" or "pin_cite={number}"
+            pin_cite_match = re.search(r'at (\d+)', citation_text)
+            pin_cite = pin_cite_match.group(1) if pin_cite_match else None
 
-                # Determine the case name
-                if plaintiff and defendant:
-                    case_name = f"{plaintiff} v. {defendant}"
-                elif plaintiff:
-                    case_name = plaintiff
-                else:
-                    case_name = defendant
+            # Check for explicit pin_cite
+            explicit_pin_cite_match = re.search(r"pin_cite=(\d+)", line)
+            if explicit_pin_cite_match:
+                pin_cite = explicit_pin_cite_match.group(1)
 
-                # Format the citation line based on the presence of page and pin_cite
-                if pin_cite and not page:
-                    citation_line = f"{volume} {reporter} at {pin_cite}"
-                else:
-                    citation_line = f"{case_name}, {volume} {reporter} {page}"
-                    if pin_cite:
-                        citation_line += f", {pin_cite}"
+            # Extract plaintiff, defendant, court, and year
+            plaintiff_match = re.search(r"plaintiff='([^']*)'", line)
+            defendant_match = re.search(r"defendant='([^']*)'", line)
+            court_match = re.search(r"court='([^']*)'", line)
+            year_match = re.search(r"year='([^']*)'", line)
 
-                # Add the formatted line to the list
-                citations.append(f"<p>{citation_line}</p>")
+            plaintiff = plaintiff_match.group(1) if plaintiff_match else 'none'
+            defendant = defendant_match.group(1) if defendant_match else 'none'
+            court = court_match.group(1) if court_match else 'none'
+            year = year_match.group(1) if year_match else 'none'
+
+            # Trim plaintiff and defendant if they contain ' ,'
+            if ' ,' in plaintiff:
+                plaintiff = plaintiff.split(' ,')[0]
+            if ' ,' in defendant:
+                defendant = defendant.split(' ,')[0]
+
+            if citation_text == "Id.":
+                if last_citation:
+                    volume, reporter, page = last_citation
             else:
-                print(f"Line {line_number} not matched: {line.strip()}")
+                # Split the citation text into volume, reporter, and page
+                parts = citation_text.split(' ')
+                volume, reporter, page = parts[0], ' '.join(parts[1:-1]), parts[-1]
 
-    # Join all citation lines into a single HTML output
-    html_output = "\n".join(citations)
-    return html_output
+                # Check if the reporter ends with "at"
+                if reporter.endswith(" at"):
+                    reporter = reporter[:-3]  # Remove " at"
+                    page = None
+                    pin_cite = parts[-1]  # Set pin_cite to the page number
 
-# Specify the path to your file
-file_path = os.path.join(os.path.dirname(__file__), 'sample.txt')
-html_output = generate_html_from_file(file_path)
+                last_citation = (volume, reporter, page)
 
-# Print or save the HTML output
-print(html_output)
+            # Check for previous citation with the same volume-reporter-page
+            citation_key = (volume, reporter, page)
+            if citation_key in citation_map:
+                if plaintiff == 'none' and defendant == 'none':
+                    # Look for the first occurrence with non-none plaintiff/defendant
+                    stored_citation = citation_map[citation_key]
+                    if stored_citation['plaintiff'] != 'none':
+                        plaintiff = stored_citation['plaintiff']
+                    if stored_citation['defendant'] != 'none':
+                        defendant = stored_citation['defendant']
+                else:
+                    if plaintiff == 'none':
+                        plaintiff = citation_map[citation_key]['plaintiff']
+                    if defendant == 'none':
+                        defendant = citation_map[citation_key]['defendant']
+            else:
+                # Store the citation in the map
+                citation_map[citation_key] = {
+                    'plaintiff': plaintiff,
+                    'defendant': defendant
+                }
+
+            # Create the data structure
+            citation_data = {
+                'plaintiff': plaintiff,
+                'defendant': defendant,
+                'volume': volume,
+                'reporter': reporter,
+                'page': page,
+                'court': court,
+                'year': year
+            }
+            if pin_cite:
+                citation_data['pin_cite'] = pin_cite
+
+            citations.append(citation_data)
+
+    return citations
+
+# Example usage
+file_path = '/Volumes/12TB/Users/MB/github/cite_check/sample.txt'
+citations = parse_citations(file_path)
+for citation in citations:
+    print(citation)
